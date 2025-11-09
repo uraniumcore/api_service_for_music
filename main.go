@@ -9,60 +9,75 @@ import (
 	"path/filepath"
 
 	"github.com/gorilla/mux"
+	"github.com/rs/cors"
 )
 
 func main() {
-	fmt.Println("Gopher!")
-	
 	r := mux.NewRouter()
+
+	// 🎵 Serve audio files
 	r.HandleFunc("/audio/{filename}", serveAudio).Methods("GET")
-	r.HandleFunc("/info/{filename}", infoHandler).Methods("GET")
+
+	// ℹ️ Provide info about available audio files
+	r.HandleFunc("/info", getAudioInfo).Methods("GET")
+
+	// ✅ CORS setup (allow localhost + GitHub Pages)
+	c := cors.New(cors.Options{
+		AllowedOrigins: []string{
+			"http://localhost:3000",
+			"https://yourusername.github.io",
+		},
+		AllowedMethods:   []string{"GET", "POST", "OPTIONS"},
+		AllowedHeaders:   []string{"*"},
+		AllowCredentials: true,
+	})
+
+	handler := c.Handler(r)
 
 	fmt.Println("🚀 Server running on http://localhost:8080")
-	log.Fatal(http.ListenAndServe(":8080", r))
+	log.Fatal(http.ListenAndServe(":8080", handler))
 }
 
-// infoHandler writes the name and extension of a file (if it exists) in JSON
-func infoHandler(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	filename := vars["filename"]
-
-	// List of extensions we support in the audio folder
-	exts := []string{".m4a", ".mp3"}
-
-	for _, ext := range exts {
-		fp := filepath.Join("audio", filename+ext)
-		if _, err := os.Stat(fp); err == nil {
-			// Found the file; return JSON with name and extension (without dot)
-			resp := map[string]string{
-				"name":      filename,
-				"extension": ext[1:],
-			}
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
-			return
-		}
-	}
-
-	http.Error(w, "File not found", http.StatusNotFound)
-}
-
-// serveAudio serves a local .m4a file
 func serveAudio(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	filename := vars["filename"]
 
 	filePath := filepath.Join("audio", filename+".m4a")
 
-	// Check if file exists
 	if _, err := os.Stat(filePath); os.IsNotExist(err) {
 		http.Error(w, "File not found", http.StatusNotFound)
 		return
 	}
 
-	// Set headers for audio file
-	w.Header().Set("Content-Type", "audio/mp4") // correct MIME type for .m4a
+	w.Header().Set("Content-Type", "audio/mp4")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("inline; filename=\"%s.m4a\"", filename))
-
 	http.ServeFile(w, r, filePath)
+}
+
+// getAudioInfo lists all .m4a files in the audio directory
+func getAudioInfo(w http.ResponseWriter, r *http.Request) {
+	files, err := os.ReadDir("audio")
+	if err != nil {
+		http.Error(w, "Could not read audio directory", http.StatusInternalServerError)
+		return
+	}
+
+	type AudioFile struct {
+		Name string `json:"name"`
+		URL  string `json:"url"`
+	}
+
+	var audioList []AudioFile
+	for _, file := range files {
+		if filepath.Ext(file.Name()) == ".m4a" {
+			name := file.Name()
+			audioList = append(audioList, AudioFile{
+				Name: name,
+				URL:  fmt.Sprintf("/audio/%s", name[:len(name)-4]), // strip ".m4a"
+			})
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(audioList)
 }
